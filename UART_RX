@@ -1,0 +1,94 @@
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity UART_RX is
+  port (
+    Clk         : in  std_logic;                          -- 7.68 MHz clock
+    i_RX_Serial : in  std_logic;                          -- UART RX line
+    o_RX_Done   : out std_logic;                          -- High for 1 clk when byte received
+    o_RX_Byte   : out std_logic_vector(7 downto 0)        -- Received byte
+  );
+end UART_RX;
+
+architecture Behavioral of UART_RX is
+  constant CLKS_PER_BIT : integer := 10417; -- = 800
+
+  type t_SM is (IDLE, START, DATA, STOP);
+  signal r_SM_State     : t_SM := IDLE;
+
+  signal r_Clk_Count    : integer := 0;
+  signal r_Bit_Index    : integer range 0 to 7 := 0;
+  signal r_RX_Byte      : std_logic_vector(7 downto 0) := (others => '0');
+  signal r_RX_Done      : std_logic := '0';
+
+  signal rx_sync_0, rx_sync_1 : std_logic := '1';
+begin
+
+  o_RX_Done <= r_RX_Done;
+  o_RX_Byte <= r_RX_Byte;
+
+  -- Input synchronizer
+  process(Clk)
+  begin
+    if rising_edge(Clk) then
+      rx_sync_0 <= i_RX_Serial;
+      rx_sync_1 <= rx_sync_0;
+    end if;
+  end process;
+
+  -- FSM
+  process(Clk)
+  begin
+    if rising_edge(Clk) then
+      case r_SM_State is
+        when IDLE =>
+          r_RX_Done <= '0';
+          if rx_sync_1 = '0' then
+            r_Clk_Count <= CLKS_PER_BIT / 2;
+            r_SM_State  <= START;
+          end if;
+
+        when START =>
+          r_RX_Done <= '0';
+          if r_Clk_Count = 0 then
+            if rx_sync_1 = '0' then
+              r_Clk_Count <= CLKS_PER_BIT - 1;
+              r_Bit_Index <= 0;
+              r_SM_State  <= DATA;
+            else
+              r_SM_State <= IDLE;
+            end if;
+          else
+            r_Clk_Count <= r_Clk_Count - 1;
+          end if;
+
+        when DATA =>
+          if r_Clk_Count = 0 then
+            r_RX_Byte(r_Bit_Index) <= rx_sync_1;
+            if r_Bit_Index < 7 then
+              r_Bit_Index <= r_Bit_Index + 1;
+              r_Clk_Count <= CLKS_PER_BIT - 1;
+            else
+              r_Clk_Count <= CLKS_PER_BIT - 1;
+              r_SM_State  <= STOP;
+            end if;
+          else
+            r_Clk_Count <= r_Clk_Count - 1;
+          end if;
+
+        when STOP =>
+          if r_Clk_Count = 0 then
+            r_RX_Done <= '1';
+            r_SM_State <= IDLE;
+          else
+            r_Clk_Count <= r_Clk_Count - 1;
+          end if;
+
+        when others =>
+          r_SM_State <= IDLE;
+      end case;
+    end if;
+  end process;
+end Behavioral;
+
